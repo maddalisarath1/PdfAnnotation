@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Annotator</title>
+    
+    <!-- Setup message listener IMMEDIATELY -->
+    <script>
+        console.log('Setting up message listener IMMEDIATELY...');
+        
+        var lightningOrigin = null;
+        var messageChannelEstablished = false;
+        
+        // Capture ALL messages
+        window.addEventListener('message', function(event) {
+            console.log('=== RAW MESSAGE EVENT ===');
+            console.log('Origin:', event.origin);
+            console.log('Data:', event.data);
+            
+            var messageData;
+            try {
+                if (typeof event.data === 'string') {
+                    messageData = JSON.parse(event.data);
+                } else {
+                    messageData = event.data;
+                }
+                console.log('Parsed:', messageData);
+            } catch(e) {
+                console.log('Parse error:', e);
+                return;
+            }
+            
+            // Handle system message
+            if (messageData.action === 'containerSystemMessage') {
+                console.log('✓ Container system message!');
+                if (messageData.params && messageData.params[0]) {
+                    var param = messageData.params[0];
+                    if (param.name === 'establishMessageChannel') {
+                        console.log('✓✓✓ MESSAGE CHANNEL ESTABLISHED! ✓✓✓');
+                        lightningOrigin = event.origin;
+                        messageChannelEstablished = true;
+                        
+                        // Wait a bit longer to ensure Aura is ready
+                        setTimeout(function() {
+                            var readyMsg = { name: 'containerReady', value: { status: 'ready' } };
+                            console.log('Sending containerReady:', readyMsg);
+                            
+                            // Try sending as JSON string
+                            window.parent.postMessage(JSON.stringify(readyMsg), event.origin);
+                            console.log('✓ containerReady sent as JSON string!');
+                            
+                            // Also try as object
+                            setTimeout(function() {
+                                window.parent.postMessage(readyMsg, event.origin);
+                                console.log('✓ containerReady sent as object!');
+                            }, 100);
+                        }, 500);
+                    }
+                }
+            }
+            
+            // Handle loadPDF
+            if (messageData.name === 'loadPDF') {
+                console.log('✓ Received loadPDF!');
+                var pdfData = (messageData.value && messageData.value.pdfData) || messageData.pdfData;
+                if (pdfData && window.loadPDFFunction) {
+                    window.loadPDFFunction(pdfData);
+                }
+            }
+        }, true); // Use capture phase
+        
+        console.log('Message listener ready!');
+    </script>
+    
+    <script src="pdf.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+        }
+
+        #container {
+            display: block;
+            height: 100%;
+            width: 100%;
+            position: relative;
+        }
+
+        #toolbar {
+            background: #2c3e50;
+            color: white;
+            padding: 15px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            height: 80px;
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 10;
+        }
+
+        #toolbar button {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+
+        #toolbar button:hover {
+            background: #2980b9;
+        }
+
+        #toolbar button:active {
+            transform: scale(0.98);
+        }
+
+        #toolbar button.active {
+            background: #27ae60;
+        }
+
+        #toolbar input[type="color"] {
+            width: 50px;
+            height: 35px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        #toolbar input[type="number"] {
+            width: 70px;
+            padding: 8px;
+            border: none;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+
+        #toolbar select {
+            padding: 8px;
+            border: none;
+            border-radius: 5px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        #pageInfo {
+            color: white;
+            font-size: 14px;
+            margin-left: auto;
+        }
+
+        #canvasContainer {
+            position: absolute;
+            top: 80px;
+            bottom: 50px;
+            left: 0;
+            right: 0;
+            overflow: auto;
+            background: #e0e0e0;
+            padding: 20px;
+        }
+
+        #pdfCanvas {
+            display: block;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            background: white;
+            cursor: crosshair;
+            margin: 0 auto;
+        }
+
+        #status {
+            background: #34495e;
+            color: white;
+            padding: 10px;
+            text-align: center;
+            font-size: 14px;
+            height: 50px;
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            line-height: 30px;
+        }
+
+        .separator {
+            width: 1px;
+            height: 30px;
+            background: rgba(255,255,255,0.3);
+        }
+
+        /* Text input modal */
+        #textInputModal {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            z-index: 1000;
+            min-width: 300px;
+        }
+
+        #textInputModal.show {
+            display: block;
+        }
+
+        #textInputModal input {
+            width: 100%;
+            padding: 10px;
+            font-size: 16px;
+            border: 2px solid #3498db;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+
+        #textInputModal button {
+            padding: 8px 16px;
+            margin-right: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        #textInputModal .ok-btn {
+            background: #3498db;
+            color: white;
+        }
+
+        #textInputModal .cancel-btn {
+            background: #95a5a6;
+            color: white;
+        }
+
+        #modalOverlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 999;
+        }
+
+        #modalOverlay.show {
+            display: block;
+        }
+
+        /* Confirm modal */
+        #confirmModal {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            z-index: 1000;
+            min-width: 300px;
+        }
+
+        #confirmModal.show {
+            display: block;
+        }
+
+        #confirmModal p {
+            margin: 0 0 20px 0;
+            font-size: 16px;
+            color: #333;
+        }
+
+        #confirmModal button {
+            padding: 8px 16px;
+            margin-right: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        #confirmModal .yes-btn {
+            background: #e74c3c;
+            color: white;
+        }
+
+        #confirmModal .no-btn {
+            background: #95a5a6;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <!-- Text input modal - MUST be at body level -->
+    <div id="modalOverlay"></div>
+    <div id="textInputModal">
+        <h3 style="margin-top: 0;">Enter Text</h3>
+        <input type="text" id="textInput" placeholder="Type your text here...">
+        <div>
+            <button class="ok-btn" onclick="submitTextAnnotation()">OK</button>
+            <button class="cancel-btn" onclick="cancelTextAnnotation()">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Confirm modal -->
+    <div id="confirmModal">
+        <p id="confirmMessage">Are you sure?</p>
+        <div>
+            <button class="yes-btn" onclick="confirmYes()">Yes</button>
+            <button class="no-btn" onclick="confirmNo()">No</button>
+        </div>
+    </div>
+
+    <div id="container">
+        <div id="toolbar">
+            <button id="drawBtn" onclick="setMode('draw')">✏️ Draw</button>
+            <button id="textBtn" onclick="setMode('text')">📝 Text</button>
+            <button id="highlightBtn" onclick="setMode('highlight')">🖍️ Highlight</button>
+            <button id="selectBtn" onclick="setMode('select')">👆 Select</button>
+            
+            <div class="separator"></div>
+            
+            <label style="color: white;">Color:</label>
+            <input type="color" id="colorPicker" value="#ff0000">
+            
+            <label style="color: white;">Size:</label>
+            <input type="number" id="lineWidth" value="3" min="1" max="20">
+            
+            <label style="color: white;">Font:</label>
+            <select id="fontSize">
+                <option value="12">12px</option>
+                <option value="16">16px</option>
+                <option value="20" selected>20px</option>
+                <option value="24">24px</option>
+                <option value="32">32px</option>
+            </select>
+            
+            <div class="separator"></div>
+            
+            <button onclick="clearAnnotations()">🗑️ Clear All</button>
+            <button onclick="exportAnnotations()">💾 Export</button>
+            
+            <div class="separator"></div>
+            
+            <button onclick="prevPage()">⬅️ Previous</button>
+            <span id="pageInfo">Page: 0 / 0</span>
+            <button onclick="nextPage()">➡️ Next</button>
+        </div>
+
+        <div id="canvasContainer">
+            <canvas id="pdfCanvas"></canvas>
+        </div>
+
+        <div id="status">Waiting for PDF...</div>
+    </div>
+
+    <script>
+        // Wait for PDF.js to load
+        window.addEventListener('load', function() {
+            console.log('PDF Annotator HTML initialized');
+            console.log('PDF.js version:', pdfjsLib.version);
+
+            // Configure PDF.js worker
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdf.worker.min.js';
+
+            console.log('✓ Page fully loaded and PDF.js ready');
+            updateStatus('Waiting for Salesforce connection...');
+            
+            // Send a ready ping after a short delay
+            setTimeout(function() {
+                if (!messageChannelEstablished) {
+                    console.log('No channel yet, sending direct ready signal...');
+                    window.parent.postMessage({ name: 'containerReady', value: { status: 'ready' } }, '*');
+                }
+            }, 1000);
+        });
+
+        // Global variables
+        var pdfDoc = null;
+        var pageNum = 1;
+        var pageRendering = false;
+        var pageNumPending = null;
+        var currentMode = 'select';
+        var annotations = [];
+        var isDrawing = false;
+        var currentPath = [];
+        var canvas = document.getElementById('pdfCanvas');
+        var ctx = canvas.getContext('2d');
+        var pendingTextPosition = null; // For storing text click position
+
+        // Send message to parent
+        function sendMessage(name, value) {
+            var message = {
+                name: name,
+                value: value
+            };
+            
+            console.log('Sending message:', name);
+            
+            if (lightningOrigin) {
+                window.parent.postMessage(message, lightningOrigin);
+            } else {
+                window.parent.postMessage(message, '*');
+            }
+        }
+
+        // Text input modal functions
+        function showTextInputModal(x, y) {
+            console.log('showTextInputModal called with position:', x, y);
+            pendingTextPosition = { x: x, y: y };
+            
+            var overlay = document.getElementById('modalOverlay');
+            var modal = document.getElementById('textInputModal');
+            var input = document.getElementById('textInput');
+            
+            console.log('Modal elements found:', {
+                overlay: !!overlay,
+                modal: !!modal,
+                input: !!input
+            });
+            
+            if (!overlay || !modal || !input) {
+                console.error('Modal elements not found! Adding default text instead.');
+                addTextAnnotation(x, y, 'Text');
+                return;
+            }
+            
+            overlay.classList.add('show');
+            modal.classList.add('show');
+            input.value = '';
+            input.focus();
+            
+            console.log('Modal should be visible now');
+        }
+
+        function hideTextInputModal() {
+            document.getElementById('modalOverlay').classList.remove('show');
+            document.getElementById('textInputModal').classList.remove('show');
+            pendingTextPosition = null;
+        }
+
+        function submitTextAnnotation() {
+            var text = document.getElementById('textInput').value.trim();
+            if (text && pendingTextPosition) {
+                addTextAnnotation(pendingTextPosition.x, pendingTextPosition.y, text);
+            }
+            hideTextInputModal();
+        }
+
+        function cancelTextAnnotation() {
+            hideTextInputModal();
+        }
+
+        // Confirm modal functions
+        var confirmCallback = null;
+
+        function showConfirm(message, callback) {
+            confirmCallback = callback;
+            document.getElementById('confirmMessage').textContent = message;
+            document.getElementById('modalOverlay').classList.add('show');
+            document.getElementById('confirmModal').classList.add('show');
+        }
+
+        function hideConfirm() {
+            document.getElementById('modalOverlay').classList.remove('show');
+            document.getElementById('confirmModal').classList.remove('show');
+            confirmCallback = null;
+        }
+
+        function confirmYes() {
+            if (confirmCallback) {
+                confirmCallback(true);
+            }
+            hideConfirm();
+        }
+
+        function confirmNo() {
+            if (confirmCallback) {
+                confirmCallback(false);
+            }
+            hideConfirm();
+        }
+
+        // Set annotation mode
+        function setMode(mode) {
+            currentMode = mode;
+            
+            // Update button states
+            document.querySelectorAll('#toolbar button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            
+            if (mode === 'draw') {
+                document.getElementById('drawBtn').classList.add('active');
+                canvas.style.cursor = 'crosshair';
+            } else if (mode === 'text') {
+                document.getElementById('textBtn').classList.add('active');
+                canvas.style.cursor = 'text';
+            } else if (mode === 'highlight') {
+                document.getElementById('highlightBtn').classList.add('active');
+                canvas.style.cursor = 'cell';
+            } else {
+                document.getElementById('selectBtn').classList.add('active');
+                canvas.style.cursor = 'default';
+            }
+            
+            console.log('Mode changed to:', mode);
+        }
+
+        // Load PDF from base64 data
+        function loadPDF(base64Data) {
+            console.log('loadPDF called, data length:', base64Data.length);
+            updateStatus('Loading PDF...');
+
+            try {
+                // Convert base64 to binary
+                var binaryString = atob(base64Data);
+                var bytes = new Uint8Array(binaryString.length);
+                for (var i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+
+                console.log('Binary data created, length:', bytes.length);
+
+                // Load PDF
+                var loadingTask = pdfjsLib.getDocument({ data: bytes });
+                loadingTask.promise.then(function(pdf) {
+                    console.log('✓ PDF loaded successfully!');
+                    pdfDoc = pdf;
+                    document.getElementById('pageInfo').textContent = 'Page: 1 / ' + pdf.numPages;
+                    
+                    // Render first page
+                    renderPage(pageNum);
+                    
+                    // Send success message
+                    sendMessage('pdfLoaded', {
+                        numPages: pdf.numPages
+                    });
+                    
+                    updateStatus('PDF loaded - ' + pdf.numPages + ' pages');
+                    
+                }).catch(function(error) {
+                    console.error('Error loading PDF:', error);
+                    updateStatus('Error loading PDF: ' + error.message);
+                    sendMessage('error', {
+                        message: 'Failed to load PDF: ' + error.message
+                    });
+                });
+                
+            } catch(error) {
+                console.error('Error processing PDF data:', error);
+                updateStatus('Error processing PDF: ' + error.message);
+                sendMessage('error', {
+                    message: 'Failed to process PDF: ' + error.message
+                });
+            }
+        }
+        
+        // Expose globally for message handler
+        window.loadPDFFunction = loadPDF;
+
+        // Render PDF page
+        function renderPage(num) {
+            pageRendering = true;
+            updateStatus('Rendering page ' + num + '...');
+
+            pdfDoc.getPage(num).then(function(page) {
+                console.log('Rendering page:', num);
+                
+                // Use a fixed scale that makes PDFs readable
+                // Scale of 2.0 provides good readability for most documents
+                var scale = 2.0;
+                
+                console.log('Using fixed scale:', scale);
+                
+                // Get viewport with scale
+                var viewport = page.getViewport({ scale: scale });
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+                
+                console.log('Canvas dimensions:', canvas.width, 'x', canvas.height);
+
+                var renderContext = {
+                    canvasContext: ctx,
+                    viewport: viewport
+                };
+
+                var renderTask = page.render(renderContext);
+                renderTask.promise.then(function() {
+                    console.log('✓ Page rendered successfully');
+                    pageRendering = false;
+                    
+                    if (pageNumPending !== null) {
+                        renderPage(pageNumPending);
+                        pageNumPending = null;
+                    }
+                    
+                    // Redraw annotations for this page
+                    redrawAnnotations();
+                    
+                    updateStatus('Page ' + num + ' of ' + pdfDoc.numPages);
+                });
+            });
+        }
+
+        // Page navigation
+        function prevPage() {
+            if (pageNum <= 1) return;
+            pageNum--;
+            queueRenderPage(pageNum);
+            document.getElementById('pageInfo').textContent = 'Page: ' + pageNum + ' / ' + pdfDoc.numPages;
+        }
+
+        function nextPage() {
+            if (pageNum >= pdfDoc.numPages) return;
+            pageNum++;
+            queueRenderPage(pageNum);
+            document.getElementById('pageInfo').textContent = 'Page: ' + pageNum + ' / ' + pdfDoc.numPages;
+        }
+
+        function queueRenderPage(num) {
+            if (pageRendering) {
+                pageNumPending = num;
+            } else {
+                renderPage(num);
+            }
+        }
+
+        // Canvas drawing handlers
+        canvas.addEventListener('mousedown', function(e) {
+            if (currentMode === 'draw') {
+                isDrawing = true;
+                currentPath = [];
+                var rect = canvas.getBoundingClientRect();
+                var x = e.clientX - rect.left;
+                var y = e.clientY - rect.top;
+                currentPath.push({ x: x, y: y });
+            } else if (currentMode === 'text') {
+                var rect = canvas.getBoundingClientRect();
+                var x = e.clientX - rect.left;
+                var y = e.clientY - rect.top;
+                
+                // Show custom text input modal
+                showTextInputModal(x, y);
+            } else if (currentMode === 'highlight') {
+                isDrawing = true;
+                currentPath = [];
+                var rect = canvas.getBoundingClientRect();
+                var x = e.clientX - rect.left;
+                var y = e.clientY - rect.top;
+                currentPath.push({ x: x, y: y });
+            }
+        });
+
+        canvas.addEventListener('mousemove', function(e) {
+            if (!isDrawing) return;
+            
+            try {
+                var rect = canvas.getBoundingClientRect();
+                var x = e.clientX - rect.left;
+                var y = e.clientY - rect.top;
+                
+                if (currentMode === 'draw') {
+                    currentPath.push({ x: x, y: y });
+                    drawPath(currentPath, document.getElementById('colorPicker').value, 
+                            parseInt(document.getElementById('lineWidth').value));
+                } else if (currentMode === 'highlight') {
+                    currentPath.push({ x: x, y: y });
+                    drawHighlight(currentPath, document.getElementById('colorPicker').value);
+                }
+            } catch(e) {
+                console.error('Error during mouse move:', e);
+                isDrawing = false;
+            }
+        });
+
+        canvas.addEventListener('mouseup', function(e) {
+            if (!isDrawing) return;
+            
+            isDrawing = false;
+            
+            try {
+                if (currentMode === 'draw' && currentPath.length > 0) {
+                    var annotation = {
+                        type: 'draw',
+                        page: pageNum,
+                        path: currentPath,
+                        color: document.getElementById('colorPicker').value,
+                        lineWidth: parseInt(document.getElementById('lineWidth').value)
+                    };
+                    annotations.push(annotation);
+                    console.log('Draw annotation added');
+                    sendMessage('annotationAdded', { annotation: annotation });
+                } else if (currentMode === 'highlight' && currentPath.length > 0) {
+                    var annotation = {
+                        type: 'highlight',
+                        page: pageNum,
+                        path: currentPath,
+                        color: document.getElementById('colorPicker').value
+                    };
+                    annotations.push(annotation);
+                    console.log('Highlight annotation added');
+                    sendMessage('annotationAdded', { annotation: annotation });
+                }
+            } catch(e) {
+                console.error('Error saving annotation:', e);
+            }
+            
+            currentPath = [];
+        });
+
+        // Drawing functions
+        function drawPath(path, color, lineWidth) {
+            if (path.length < 2) return;
+            
+            try {
+                ctx.save();
+                
+                ctx.strokeStyle = color;
+                ctx.lineWidth = lineWidth;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                
+                ctx.beginPath();
+                ctx.moveTo(path[0].x, path[0].y);
+                
+                for (var i = 1; i < path.length; i++) {
+                    ctx.lineTo(path[i].x, path[i].y);
+                }
+                
+                ctx.stroke();
+                ctx.restore();
+            } catch(e) {
+                console.error('Error drawing path:', e);
+                ctx.restore();
+            }
+        }
+
+        function drawHighlight(path, color) {
+            if (path.length < 2) return;
+            
+            try {
+                // Save the current context state
+                ctx.save();
+                
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 20;
+                ctx.globalAlpha = 0.3;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                
+                ctx.beginPath();
+                ctx.moveTo(path[0].x, path[0].y);
+                
+                for (var i = 1; i < path.length; i++) {
+                    ctx.lineTo(path[i].x, path[i].y);
+                }
+                
+                ctx.stroke();
+                
+                // Restore the context state
+                ctx.restore();
+            } catch(e) {
+                console.error('Error drawing highlight:', e);
+                // Ensure we restore context even on error
+                ctx.restore();
+            }
+        }
+
+        function addTextAnnotation(x, y, text) {
+            try {
+                var fontSize = parseInt(document.getElementById('fontSize').value);
+                var color = document.getElementById('colorPicker').value;
+                
+                ctx.save();
+                ctx.font = fontSize + 'px Arial';
+                ctx.fillStyle = color;
+                ctx.fillText(text, x, y);
+                ctx.restore();
+                
+                var annotation = {
+                    type: 'text',
+                    page: pageNum,
+                    x: x,
+                    y: y,
+                    text: text,
+                    fontSize: fontSize,
+                    color: color
+                };
+                
+                annotations.push(annotation);
+                console.log('Text annotation added:', text);
+                sendMessage('annotationAdded', { annotation: annotation });
+            } catch(e) {
+                console.error('Error adding text annotation:', e);
+            }
+        }
+
+        function redrawAnnotations() {
+            annotations.forEach(function(ann) {
+                if (ann.page !== pageNum) return;
+                
+                try {
+                    if (ann.type === 'draw') {
+                        drawPath(ann.path, ann.color, ann.lineWidth);
+                    } else if (ann.type === 'text') {
+                        ctx.save();
+                        ctx.font = ann.fontSize + 'px Arial';
+                        ctx.fillStyle = ann.color;
+                        ctx.fillText(ann.text, ann.x, ann.y);
+                        ctx.restore();
+                    } else if (ann.type === 'highlight') {
+                        drawHighlight(ann.path, ann.color);
+                    }
+                } catch(e) {
+                    console.error('Error redrawing annotation:', e, ann);
+                }
+            });
+        }
+
+        function clearAnnotations() {
+            console.log('clearAnnotations called');
+            
+            // Use custom confirm modal
+            showConfirm('Clear all annotations on this page?', function(confirmed) {
+                console.log('User confirmed:', confirmed);
+                
+                if (confirmed) {
+                    annotations = annotations.filter(function(ann) {
+                        return ann.page !== pageNum;
+                    });
+                    console.log('Annotations cleared for page', pageNum);
+                    console.log('Remaining annotations:', annotations.length);
+                    
+                    // Re-render the page to remove annotations
+                    renderPage(pageNum);
+                }
+            });
+        }
+
+        function exportAnnotations() {
+            console.log('exportAnnotations called');
+            console.log('Total annotations:', annotations.length);
+            
+            var data = {
+                annotations: annotations,
+                totalPages: pdfDoc ? pdfDoc.numPages : 0
+            };
+            
+            console.log('Exporting data:', data);
+            sendMessage('exportAnnotations', { data: data });
+            console.log('Export message sent to Aura');
+        }
+
+        function updateStatus(message) {
+            document.getElementById('status').textContent = message;
+        }
+    </script>
+</body>
+</html>

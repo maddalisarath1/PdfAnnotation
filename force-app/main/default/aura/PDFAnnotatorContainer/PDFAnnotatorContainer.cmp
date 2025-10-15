@@ -1,0 +1,39 @@
+<aura:component implements="flexipage:availableForAllPageTypes" access="global">
+    <!-- Attributes -->
+    <aura:attribute name="annotations" type="Object" default="{}" />
+    <aura:attribute name="numPages" type="Integer" default="0" />
+    <aura:attribute name="status" type="String" default="Initializing..." />
+    <aura:attribute name="containerReady" type="Boolean" default="false" />
+    <aura:attribute name="pendingPdfData" type="String" />
+    
+    <!-- Handlers -->
+    <aura:handler name="init" value="{!this}" action="{!c.doInit}" />
+    
+    <!-- UI -->
+    <div class="container">
+        <div class="header">
+            <h2>PDF Annotator</h2>
+            <div class="status">{!v.status}</div>
+        </div>
+        
+        <div class="upload-section">
+            <lightning:input type="file" 
+                           label="Upload PDF File" 
+                           accept=".pdf"
+                           onchange="{!c.handleFileUpload}" 
+                           class="file-input" />
+            
+            <!--<lightning:button label="Download Annotations" 
+                            onclick="{!c.downloadAnnotations}" 
+                            variant="brand"
+                            disabled="{!v.numPages == 0}" />-->
+        </div>
+        
+        <!-- Lightning Container for PDF Annotator -->
+        <div class="pdf-container">
+            <lightning:container aura:id="pdfContainer" 
+                               src="{!$Resource.pdfAnnotatorApp + '/index.html'}"
+                               onmessage="{!c.handleMessage}" />
+        </div>
+    </div>
+</aura:component>
